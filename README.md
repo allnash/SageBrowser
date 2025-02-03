@@ -49,6 +49,7 @@ chmod +x install_packages.sh
 5. Download the AI model:
 - Create an `ai_models` directory
 - Download DeepSeek-R1-Distill-Llama-8B-Q8_0.gguf from Hugging Face
+  - `wget https://huggingface.co/unsloth/DeepSeek-R1-Distill-Llama-8B-GGUF/resolve/main/DeepSeek-R1-Distill-Llama-8B-Q8_0.gguf`
 - Place the model file in the `ai_models` directory
 
 ## Usage
