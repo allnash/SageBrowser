@@ -1,0 +1,51 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "SageBrowser"
+
+[packages]
+python-dotenv = "*"
+aiohttp = "*"
+markdown = "*"
+pillow = "*"
+fabric = "==3.2.2"
+httpx = "*"
+tqdm = "*"
+humanize = "*"
+json-logic = "*"
+model-bakery = "*"
+faker = "*"
+numpy = "==1.26.4"
+openpyxl = "*"
+psutil = "*"
+gputil = "*"
+beautifulsoup4 = "*"
+pypdf = "*"
+sentence-transformers = "*"
+transformers = "*"
+requests = "*"
+python-ulid = "*"
+tabulate = "*"
+filetype = "*"
+pyarmor = "==8.5.12"
+"pyarmor.cli" = "==8.5.12"
+pyqt6 = "*"
+pyqt6-webengine = "*"
+
+[dev-packages]
+ipykernel = "*"
+ipython = "*"
+jupyter = "*"
+notebook = "*"
+black = { extras = ["jupyter"], version = "*" }
+flake8 = "*"
+
+[requires]
+python_version = "3.12"
+
+[scripts]
+install_pillow = "pip install pillow --no-binary=:all: --compile"
+install_numpy = "pip install numpy --no-binary=:all: --compile"
+
+[pipenv]
+allow_prereleases = true
