@@ -1,6 +1,8 @@
-# Sage Browser
+# Sage Browser (Sundai Hackathon Concept)
 
-Sage Browser is an AI-powered web browser that combines traditional web browsing capabilities with integrated AI analysis. It features a split interface with a web view and an interactive chat window, allowing users to analyze web content and engage in conversations with an AI assistant.
+Sage Browser is an **Concept** AI-powered web browser that combines traditional web browsing capabilities with integrated AI analysis. It features a split interface with a web view and an interactive chat window, allowing users to analyze web content and engage in conversations with an AI assistant.
+
+<img width="1202" alt="Screenshot 2025-02-02 at 11 57 16 PM" src="https://github.com/user-attachments/assets/06403a2d-6ac7-46b8-a720-8445d02b922a" />
 
 ## Features
 
