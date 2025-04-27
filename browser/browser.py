@@ -16,10 +16,15 @@ from lib.models import Role
 class AnalyzingWebPage(QWebEnginePage):
     def __init__(self, browser):
         super().__init__(browser)
-        self.loadFinished.connect(self._on_load_finished)
+        # You can load automatically in the future
+        # self.loadFinished.connect(self._on_load_finished)
         self.browser = browser
 
     def _on_load_finished(self, ok):
+        # Only for compatibility, but this won't auto-run anymore
+        pass
+
+    def analyze_content(self, ok=True):
         if ok:
             self.browser.chat_window.add_message(f"Page loaded, extracting content...", Role.WEB_BROWSER)
             self.runJavaScript("""
@@ -141,12 +146,13 @@ class AnalyzingWebPage(QWebEnginePage):
     Content:
     {content[:2000]}...
 
-    Please provide:
-    1. A concise summary of the main content and your thoughts on political bias
-    2. Key points or main topics covered
-    3. Important facts or data presented
-    4. Writing style and tone observations
-    5. Suggested related topics for further reading"""
+    Please provide a concise analysis including:
+    1. Summary of the main content (2-3 sentences)
+    2. Key topics covered
+    3. Objective assessment of information quality and reliability 
+    4. Any potential biases or perspectives present
+    5. Context this content fits within
+"""
 
             self.browser.chat_window.add_message("🔍 Analyzing reader-mode content...", Role.WEB_BROWSER)
 
@@ -2213,7 +2219,8 @@ class Browser(QMainWindow):
         self.web_view.reload()
 
     def analyze_current_page(self):
-        self.web_page._on_load_finished(True)
+        """Explicitly request content analysis when button clicked"""
+        self.web_page.analyze_content(True)
 
     def handle_chat_message(self, message: str):
         if hasattr(self, 'llm_integration'):
