@@ -18,6 +18,8 @@ class ChatInput(QTextEdit):
             else:
                 # Emit return pressed signal for sending
                 self.parent().send_message()
+                # Don't call super().keyPressEvent to prevent new line
+                return
         else:
             # Handle all other keys normally
             super().keyPressEvent(event)

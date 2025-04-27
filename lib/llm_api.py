@@ -15,6 +15,7 @@ ai_models_path = "ai_models"
 
 class LLMModelType:
     DEEPSEEK_R1_DISTILL_LLAMA_8B_Q8_0 = "DeepSeek-R1-Distill-Llama-8B-Q8_0.gguf"
+    QWEN_2_5_3B ="qwen2.5-3b-instruct-q4_0.gguf"
 
 
 class LLMModelMode:
@@ -45,6 +46,7 @@ class LLMInvoker:
             temperature=0,
         )
         return answer
+
 
     async def get_conversation_history(self, conversation: Conversation) -> List[Dict[str, str]]:
         messages = sorted(conversation.messages, key=lambda x: x.created_at, reverse=True)
@@ -141,5 +143,5 @@ class SingletonLLMConnect:
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = LLMConnect(model_type=LLMModelType.DEEPSEEK_R1_DISTILL_LLAMA_8B_Q8_0)
+            cls._instance = LLMConnect(model_type=LLMModelType.QWEN_2_5_3B)
         return cls._instance
