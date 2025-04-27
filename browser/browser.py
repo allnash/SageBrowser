@@ -931,7 +931,7 @@ class WebViewAutomator:
             )
 
     def check_radio(self, selector, value=None):
-        """Select a radio button"""
+        """Select a radio button with universal support for various form types"""
         js_script = f"""
         (function() {{
             try {{
@@ -965,168 +965,303 @@ class WebViewAutomator:
                     return path || "/unknown";
                 }}
 
-                // Strategy 1: If value is provided, look for a radio with that value
-                if ('{value}') {{
-                    // Try to find by selector + value
-                    let radioButton = null;
+                // Helper function to check if an element is visible
+                function isVisible(element) {{
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    return style.display !== 'none' && 
+                           style.visibility !== 'hidden' && 
+                           element.offsetParent !== null &&
+                           element.getBoundingClientRect().width > 0 && 
+                           element.getBoundingClientRect().height > 0;
+                }}
 
-                    // Try by CSS selector + value
-                    try {{
-                        radioButton = document.querySelector(`${{'{selector}'}}[value="${{'{value}'}}"]`);
-                    }} catch (e) {{
-                        // Invalid selector, continue with other methods
-                    }}
+                // Strategy 1: Find by question text first
+                const potentialQuestionElements = document.querySelectorAll(
+                    '[role="heading"], h1, h2, h3, h4, h5, h6, legend, label, p, span, div'
+                );
 
-                    // Try by name attribute + value
-                    if (!radioButton) {{
-                        const radiosByName = document.querySelectorAll(`[name="${{'{selector}'}}"]`);
-                        for (const radio of radiosByName) {{
-                            if (radio.type === 'radio' && radio.value === '{value}') {{
-                                radioButton = radio;
+                let formSection = null;
+
+                // Find the section containing our question
+                for (const element of potentialQuestionElements) {{
+                    if (!isVisible(element)) continue;
+
+                    if (element.textContent.toLowerCase().includes('{selector}'.toLowerCase())) {{
+                        // Found question text, now find the container
+                        let section = element;
+                        let radioFound = false;
+
+                        // Look up the DOM tree for a container with radio buttons
+                        for (let i = 0; i < 10; i++) {{ // Maximum of 10 parent levels to search
+                            // Check if current section contains radio buttons
+                            const radios = section.querySelectorAll('input[type="radio"], [role="radio"]');
+                            if (radios.length > 0) {{
+                                formSection = section;
+                                radioFound = true;
+                                break;
+                            }}
+
+                            // Move up to parent if it exists and isn't the body element
+                            if (section.parentElement && section.parentElement !== document.body) {{
+                                section = section.parentElement;
+                            }} else {{
                                 break;
                             }}
                         }}
-                    }}
 
-                    // Try by general radio + value
-                    if (!radioButton) {{
-                        const allRadios = document.querySelectorAll('input[type="radio"]');
-                        for (const radio of allRadios) {{
-                            if (radio.value === '{value}') {{
-                                radioButton = radio;
-                                break;
-                            }}
-                        }}
-                    }}
-
-                    // Try by label text
-                    if (!radioButton) {{
-                        const labels = Array.from(document.querySelectorAll('label'));
-                        for (const label of labels) {{
-                            if (label.textContent.trim().toLowerCase() === '{value}'.toLowerCase()) {{
-                                if (label.htmlFor) {{
-                                    const radioByLabel = document.getElementById(label.htmlFor);
-                                    if (radioByLabel && radioByLabel.type === 'radio') {{
-                                        radioButton = radioByLabel;
-                                        break;
-                                    }}
-                                }} else {{
-                                    const nestedRadio = label.querySelector('input[type="radio"]');
-                                    if (nestedRadio) {{
-                                        radioButton = nestedRadio;
-                                        break;
-                                    }}
-                                }}
-                            }}
-                        }}
-                    }}
-
-                    if (radioButton) {{
-                        const radioXPath = getXPath(radioButton);
-                        radioButton.checked = true;
-                        radioButton.dispatchEvent(new Event('change', {{ bubbles: true }}));
-
-                        // Also trigger click event for additional compatibility
-                        radioButton.click();
-
-                        return {{ 
-                            success: true, 
-                            method: 'value_or_label_match',
-                            xpath: radioXPath,
-                            value: radioButton.value,
-                            name: radioButton.name || 'unknown'
-                        }};
+                        // If we found radio buttons, no need to check other question elements
+                        if (radioFound) break;
                     }}
                 }}
 
-                // Strategy 2: By selector directly - for when selector is more specific
-                try {{
-                    let radioButton = null;
+                // If we found a section with radio buttons
+                if (formSection) {{
+                    // Find all radio containers/buttons
+                    const radioButtons = formSection.querySelectorAll('input[type="radio"], [role="radio"]');
+                    const radioContainers = Array.from(formSection.querySelectorAll('label, div'))
+                        .filter(el => el.querySelector('input[type="radio"], [role="radio"]'));
 
-                    // Direct CSS selector
-                    try {{
-                        radioButton = document.querySelector('{selector}');
-                    }} catch (e) {{
-                        // Invalid selector, continue with other methods
-                    }}
+                    // If we have radio buttons
+                    if (radioButtons.length > 0 || radioContainers.length > 0) {{
+                        // If option value is provided, try to match it
+                        if ('{value}') {{
+                            // Method 1: Try matching by container text first
+                            for (const container of radioContainers) {{
+                                if (!isVisible(container)) continue;
 
-                    // By ID
-                    if (!radioButton) {{
-                        radioButton = document.getElementById('{selector}');
-                    }}
+                                const containerText = container.textContent.trim().toLowerCase();
+                                if (containerText.includes('{value}'.toLowerCase())) {{
+                                    // Find the actual radio element
+                                    const radio = container.querySelector('input[type="radio"], [role="radio"]') || container;
 
-                    // By name (gets first radio in group)
-                    if (!radioButton) {{
-                        const radios = document.getElementsByName('{selector}');
-                        if (radios.length > 0) {{
-                            radioButton = radios[0]; // Select first by default
+                                    // Get XPath before clicking
+                                    const xpath = getXPath(radio);
+
+                                    // Click the element
+                                    radio.click();
+
+                                    return {{
+                                        success: true,
+                                        method: 'container_text_match',
+                                        xpath: xpath,
+                                        value: '{value}',
+                                        labelText: containerText
+                                    }};
+                                }}
+                            }}
+
+                            // Method 2: Try matching directly by radio button value or nearby text
+                            for (const radio of radioButtons) {{
+                                if (!isVisible(radio)) continue;
+
+                                // Check radio value
+                                if (radio.value && radio.value.toLowerCase() === '{value}'.toLowerCase()) {{
+                                    const xpath = getXPath(radio);
+                                    radio.click();
+
+                                    return {{
+                                        success: true,
+                                        method: 'value_match',
+                                        xpath: xpath,
+                                        value: '{value}'
+                                    }};
+                                }}
+
+                                // Check nearby text
+                                let radioLabel = null;
+
+                                // Try to find associated label by 'for' attribute
+                                if (radio.id) {{
+                                    radioLabel = document.querySelector(`label[for="${{radio.id}}"]`);
+                                }}
+
+                                // Try to find parent label
+                                if (!radioLabel) {{
+                                    radioLabel = radio.closest('label');
+                                }}
+
+                                // Try to find sibling or nearby text
+                                if (!radioLabel) {{
+                                    const parent = radio.parentElement;
+                                    if (parent) {{
+                                        const nearbyText = parent.textContent.trim();
+                                        if (nearbyText.toLowerCase().includes('{value}'.toLowerCase())) {{
+                                            const xpath = getXPath(radio);
+                                            radio.click();
+
+                                            return {{
+                                                success: true,
+                                                method: 'nearby_text_match',
+                                                xpath: xpath,
+                                                value: '{value}',
+                                                text: nearbyText
+                                            }};
+                                        }}
+                                    }}
+                                }}
+
+                                // If we found a label, check its text
+                                if (radioLabel && radioLabel.textContent.trim().toLowerCase().includes('{value}'.toLowerCase())) {{
+                                    const xpath = getXPath(radio);
+                                    radio.click();
+
+                                    return {{
+                                        success: true,
+                                        method: 'label_text_match',
+                                        xpath: xpath,
+                                        value: '{value}',
+                                        labelText: radioLabel.textContent.trim()
+                                    }};
+                                }}
+                            }}
+                        }}
+
+                        // If value not provided or no match found, select first radio button
+                        const firstRadio = radioButtons.length > 0 ? 
+                            radioButtons[0] : 
+                            radioContainers[0].querySelector('input[type="radio"], [role="radio"]') || radioContainers[0];
+
+                        if (firstRadio) {{
+                            const xpath = getXPath(firstRadio);
+                            firstRadio.click();
+
+                            return {{
+                                success: true,
+                                method: 'first_option',
+                                xpath: xpath,
+                                value: '{value}' ? `{value} (not found, selected first option)` : 'first option'
+                            }};
                         }}
                     }}
+                }}
 
-                    if (radioButton && radioButton.type === 'radio') {{
-                        const radioXPath = getXPath(radioButton);
-                        radioButton.checked = true;
-                        radioButton.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                // Strategy 2: Try by direct value matching if selector is a radio name
+                {{
+                    // Try to find by name attribute + value
+                    const radiosByName = document.querySelectorAll(`[name="${{{selector}}}"]`);
+                    if (radiosByName.length > 0) {{
+                        // If specific value provided
+                        if ('{value}') {{
+                            for (const radio of radiosByName) {{
+                                if (radio.type === 'radio' && radio.value === '{value}') {{
+                                    const radioXPath = getXPath(radio);
+                                    radio.checked = true;
+                                    radio.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                    radio.click();
 
-                        // Also trigger click event for additional compatibility
-                        radioButton.click();
+                                    return {{ 
+                                        success: true, 
+                                        method: 'name_value_match',
+                                        xpath: radioXPath,
+                                        value: radio.value,
+                                        name: radio.name
+                                    }};
+                                }}
+                            }}
+                        }}
+
+                        // No matching value or no value provided, select first radio
+                        const firstRadio = radiosByName[0];
+                        if (firstRadio.type === 'radio') {{
+                            const radioXPath = getXPath(firstRadio);
+                            firstRadio.checked = true;
+                            firstRadio.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            firstRadio.click();
+
+                            return {{ 
+                                success: true, 
+                                method: 'name_first_match',
+                                xpath: radioXPath,
+                                value: firstRadio.value,
+                                name: firstRadio.name
+                            }};
+                        }}
+                    }}
+                }}
+
+                // Strategy 3: Try by direct CSS selector
+                try {{
+                    const directRadio = document.querySelector('{selector}');
+                    if (directRadio && (directRadio.type === 'radio' || directRadio.getAttribute('role') === 'radio')) {{
+                        const radioXPath = getXPath(directRadio);
+
+                        if (directRadio.type === 'radio') {{
+                            directRadio.checked = true;
+                            directRadio.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        }}
+
+                        directRadio.click();
 
                         return {{ 
                             success: true, 
                             method: 'direct_selector',
                             xpath: radioXPath,
-                            value: radioButton.value,
-                            name: radioButton.name || 'unknown'
+                            value: directRadio.value || 'unknown'
                         }};
                     }}
                 }} catch (e) {{
-                    // Move to the next strategy
+                    // Invalid selector, continue with other methods
                 }}
 
-                // Strategy 3: By label text
-                try {{
-                    const labels = Array.from(document.querySelectorAll('label'));
-                    for (const label of labels) {{
-                        if (label.textContent.trim().toLowerCase().includes('{selector}'.toLowerCase())) {{
-                            let radioButton = null;
+                // Strategy 4: Try to find any radio group with matching question text in any form element
+                const radioGroups = document.querySelectorAll('fieldset, [role="radiogroup"], form, div');
+                for (const group of radioGroups) {{
+                    if (!isVisible(group)) continue;
 
-                            if (label.htmlFor) {{
-                                radioButton = document.getElementById(label.htmlFor);
-                            }} else {{
-                                radioButton = label.querySelector('input[type="radio"]');
+                    if (group.textContent.toLowerCase().includes('{selector}'.toLowerCase())) {{
+                        const radios = group.querySelectorAll('input[type="radio"], [role="radio"]');
+
+                        if (radios.length > 0) {{
+                            // If value provided, try to match
+                            if ('{value}') {{
+                                for (const radio of radios) {{
+                                    if (!isVisible(radio)) continue;
+
+                                    const radioContainer = radio.closest('label') || radio.parentElement;
+                                    const radioText = radioContainer ? radioContainer.textContent.trim() : '';
+
+                                    if (radio.value === '{value}' || 
+                                        radioText.toLowerCase().includes('{value}'.toLowerCase())) {{
+
+                                        const xpath = getXPath(radio);
+                                        radio.click();
+
+                                        return {{
+                                            success: true,
+                                            method: 'group_match',
+                                            xpath: xpath,
+                                            value: '{value}',
+                                            groupText: group.textContent.trim().substring(0, 100) + '...'
+                                        }};
+                                    }}
+                                }}
                             }}
 
-                            if (radioButton && radioButton.type === 'radio') {{
-                                const radioXPath = getXPath(radioButton);
-                                radioButton.checked = true;
-                                radioButton.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            // No match or no value, select first radio
+                            const firstRadio = radios[0];
+                            const xpath = getXPath(firstRadio);
+                            firstRadio.click();
 
-                                // Also trigger click event
-                                radioButton.click();
-
-                                return {{ 
-                                    success: true, 
-                                    method: 'label_text',
-                                    xpath: radioXPath,
-                                    value: radioButton.value,
-                                    name: radioButton.name || 'unknown',
-                                    labelText: label.textContent.trim()
-                                }};
-                            }}
+                            return {{
+                                success: true,
+                                method: 'group_first_option',
+                                xpath: xpath,
+                                value: '{value}' ? `{value} (not found, selected first option)` : 'first option',
+                                groupText: group.textContent.trim().substring(0, 100) + '...'
+                            }};
                         }}
                     }}
-                }} catch (e) {{
-                    // Failed to find by label text
                 }}
 
-                return {{ 
-                    success: false, 
-                    message: `Radio button not found with selector: ${{'{selector}'}} and value: ${{'{value}'}}` 
+                return {{
+                    success: false,
+                    message: `Radio button not found for question: {selector}` + ('{value}' ? ` with value: {value}` : '')
                 }};
             }} catch (e) {{
-                return {{ 
-                    success: false, 
-                    message: `Error checking radio button: ${{e.message}}` 
+                return {{
+                    success: false,
+                    message: `Error selecting radio option: ${{e.message}}`
                 }};
             }}
         }})();
@@ -1138,19 +1273,32 @@ class WebViewAutomator:
         """Handle the result of a radio button selection operation"""
         if result.get('success'):
             method = result.get('method')
-            if method == 'label_text':
+
+            # Google Forms specific methods
+            if 'google_forms' in method:
                 self.browser.chat_window.add_message(
-                    f"✓ Selected radio button with label '{result.get('labelText')}'\n" +
-                    f"  Value: {result.get('value')}\n" +
-                    f"  Name: {result.get('name')}\n" +
+                    f"✓ Selected Google Form radio option '{result.get('value')}'\n" +
+                    f"  Label: {result.get('labelText', 'N/A')}\n" +
+                    f"  Found by: {method}\n" +
                     f"  XPath: {result.get('xpath')}",
                     Role.WEB_BROWSER
                 )
+            # Generic selection by label
+            elif 'label' in method or 'heading' in method or 'container' in method:
+                label_info = result.get('labelText') or result.get('containerText') or ''
+                self.browser.chat_window.add_message(
+                    f"✓ Selected radio button in '{label_info}'\n" +
+                    f"  Value: {result.get('value')}\n" +
+                    f"  Found by: {method}\n" +
+                    f"  XPath: {result.get('xpath')}",
+                    Role.WEB_BROWSER
+                )
+            # Direct selector methods
             else:
                 self.browser.chat_window.add_message(
                     f"✓ Selected radio button\n" +
                     f"  Value: {result.get('value')}\n" +
-                    f"  Name: {result.get('name')}\n" +
+                    f"  Name: {result.get('name', 'N/A')}\n" +
                     f"  Found by: {method}\n" +
                     f"  XPath: {result.get('xpath')}",
                     Role.WEB_BROWSER
