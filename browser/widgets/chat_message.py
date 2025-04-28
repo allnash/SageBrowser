@@ -9,9 +9,9 @@ class ChatMessage(QFrame):
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Raised)
         layout = QVBoxLayout(self)
 
-        # Message header
-        header = QLabel("You" if is_user else "Assistant")
-        header.setStyleSheet("font-weight: bold; color: #555;")
+        # Message header - save reference to update later if needed
+        self.header = QLabel("You" if is_user else "Assistant")
+        self.header.setStyleSheet("font-weight: bold; color: #555;")
 
         # Message content - keep reference to update later
         self.content = QLabel(message)
@@ -22,7 +22,7 @@ class ChatMessage(QFrame):
         timestamp = QLabel(datetime.now().strftime("%H:%M"))
         timestamp.setStyleSheet("color: #999; font-size: 10px;")
 
-        layout.addWidget(header)
+        layout.addWidget(self.header)
         layout.addWidget(self.content)
         layout.addWidget(timestamp)
 

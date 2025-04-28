@@ -170,6 +170,618 @@ class WebViewAutomator:
         self.browser = browser
         self.web_view = browser.web_view
 
+    def detect_form_fields(self):
+        """Scan the page and detect all form fields with their properties"""
+        js_script = """
+        (function() {
+            try {
+                // Helper function to check if element is visible
+                function isVisible(element) {
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    return style.display !== 'none' && 
+                           style.visibility !== 'hidden' && 
+                           element.offsetParent !== null &&
+                           element.getBoundingClientRect().width > 0 && 
+                           element.getBoundingClientRect().height > 0;
+                }
+
+                // Get label text for a form field
+                function getLabelText(element) {
+                    // Check for label with 'for' attribute
+                    if (element.id) {
+                        const label = document.querySelector(`label[for="${element.id}"]`);
+                        if (label && label.textContent.trim()) {
+                            return label.textContent.trim();
+                        }
+                    }
+
+                    // Check for parent label
+                    const parentLabel = element.closest('label');
+                    if (parentLabel && parentLabel.textContent.trim()) {
+                        // Remove the text of the input itself from the label text
+                        const clone = parentLabel.cloneNode(true);
+                        const inputs = clone.querySelectorAll('input, select, textarea');
+                        inputs.forEach(input => input.remove());
+                        return clone.textContent.trim();
+                    }
+
+                    // Look for nearby text that might serve as label
+                    const parent = element.parentElement;
+                    if (parent) {
+                        // Check for text nodes or elements that might be labels
+                        const possibleLabels = Array.from(parent.childNodes)
+                            .filter(node => {
+                                return (node.nodeType === 3 && node.textContent.trim()) || // Text node
+                                      (node.nodeType === 1 && 
+                                       node !== element && 
+                                       !['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(node.tagName) &&
+                                       node.textContent.trim());
+                            });
+
+                        if (possibleLabels.length > 0) {
+                            return possibleLabels[0].textContent.trim();
+                        }
+                    }
+
+                    // Check for aria-label
+                    if (element.getAttribute('aria-label')) {
+                        return element.getAttribute('aria-label');
+                    }
+
+                    // Check for placeholder
+                    if (element.getAttribute('placeholder')) {
+                        return element.getAttribute('placeholder');
+                    }
+
+                    // Fallback to name or id
+                    return element.name || element.id || "";
+                }
+
+                // Function to determine field type
+                function getFieldType(element) {
+                    if (element.tagName === 'SELECT') {
+                        return 'select';
+                    }
+
+                    if (element.tagName === 'TEXTAREA') {
+                        return 'textarea';
+                    }
+
+                    if (element.tagName === 'INPUT') {
+                        return element.type || 'text';
+                    }
+
+                    if (element.getAttribute('contenteditable') === 'true') {
+                        return 'contenteditable';
+                    }
+
+                    return 'unknown';
+                }
+
+                // Find all form fields
+                const formFields = [];
+                const inputElements = document.querySelectorAll('input:not([type="hidden"]), select, textarea, [contenteditable="true"]');
+
+                inputElements.forEach(element => {
+                    if (!isVisible(element)) return;
+
+                    const labelText = getLabelText(element);
+                    const fieldType = getFieldType(element);
+                    const required = element.required || element.getAttribute('aria-required') === 'true';
+
+                    // Get options for select elements
+                    let options = [];
+                    if (element.tagName === 'SELECT') {
+                        options = Array.from(element.options).map(option => ({
+                            value: option.value,
+                            text: option.text
+                        }));
+                    }
+
+                    // Get radio button options if this is part of a radio group
+                    let radioOptions = [];
+                    if (fieldType === 'radio' && element.name) {
+                        const radioGroup = document.querySelectorAll(`input[type="radio"][name="${element.name}"]`);
+                        if (radioGroup.length > 1) {
+                            radioOptions = Array.from(radioGroup).map(radio => {
+                                const radioLabel = getLabelText(radio);
+                                return {
+                                    value: radio.value,
+                                    text: radioLabel || radio.value
+                                };
+                            });
+                        }
+                    }
+
+                    // Filter out fields with no identification
+                    if (labelText || element.name || element.id || element.placeholder) {
+                        formFields.push({
+                            label: labelText,
+                            name: element.name || "",
+                            id: element.id || "",
+                            type: fieldType,
+                            required: required,
+                            placeholder: element.placeholder || "",
+                            options: options,
+                            radioOptions: radioOptions,
+                            hasValue: element.value ? true : false,
+                            selector: element.id ? `#${element.id}` : 
+                                     element.name ? `[name="${element.name}"]` : null
+                        });
+                    }
+                });
+
+                return { 
+                    success: true, 
+                    fields: formFields,
+                    url: window.location.href,
+                    title: document.title
+                };
+            } catch (e) {
+                return { 
+                    success: false, 
+                    message: `Error detecting form fields: ${e.message}` 
+                };
+            }
+        })();
+        """
+
+        self.web_view.page().runJavaScript(js_script, self._handle_detect_fields_result)
+
+    def _handle_detect_fields_result(self, result):
+        """Handle the result of form field detection"""
+        if result.get('success'):
+            fields = result.get('fields', [])
+            if fields:
+                formatted_fields = []
+                for field in fields:
+                    field_info = f"• {field.get('label') or field.get('name') or field.get('id')} ({field.get('type')})"
+
+                    if field.get('required'):
+                        field_info += " [Required]"
+
+                    if field.get('options') and len(field.get('options')) > 0:
+                        options_str = ", ".join([opt.get('text') for opt in field.get('options')])
+                        field_info += f" [Options: {options_str}]"
+
+                    if field.get('radioOptions') and len(field.get('radioOptions')) > 0:
+                        options_str = ", ".join([opt.get('text') for opt in field.get('radioOptions')])
+                        field_info += f" [Options: {options_str}]"
+
+                    formatted_fields.append(field_info)
+
+                fields_text = "\n".join(formatted_fields)
+                form_info = f"Form detected on {result.get('title')}\n\nFields found ({len(fields)}):\n{fields_text}"
+
+                # Store detected fields in browser
+                self.browser.detected_form_fields = result.get('fields', [])
+
+                # Pass detected fields to LLM for sample data generation if this was a form-fill request
+                self.browser.chat_window.add_message(form_info, Role.WEB_BROWSER)
+
+                # Check if this was triggered by a form fill request and if LLM integration exists
+                if hasattr(self.browser, 'llm_integration'):
+                    # Explicitly generate sample form data
+                    self.browser.llm_integration.generate_sample_form_data(self.browser.detected_form_fields)
+                else:
+                    self.browser.chat_window.add_message(
+                        "✗ LLM integration not initialized. Cannot generate sample data.",
+                        Role.WEB_BROWSER
+                    )
+            else:
+                self.browser.chat_window.add_message("No form fields detected on this page.", Role.WEB_BROWSER)
+                self.browser.detected_form_fields = []
+        else:
+            self.browser.chat_window.add_message(
+                f"✗ Failed to detect form fields: {result.get('message')}",
+                Role.WEB_BROWSER
+            )
+            self.browser.detected_form_fields = []
+
+    def map_form_fields(self):
+        """Create a detailed mapping of form fields with their properties"""
+        js_script = """
+        (function() {
+            try {
+                // Helper function to check if element is visible
+                function isVisible(element) {
+                    if (!element) return false;
+                    const style = window.getComputedStyle(element);
+                    return style.display !== 'none' && 
+                           style.visibility !== 'hidden' && 
+                           element.offsetParent !== null &&
+                           element.getBoundingClientRect().width > 0 && 
+                           element.getBoundingClientRect().height > 0;
+                }
+
+                // Get label text for a form field
+                function getLabelText(element) {
+                    // Check for label with 'for' attribute
+                    if (element.id) {
+                        const label = document.querySelector(`label[for="${element.id}"]`);
+                        if (label && label.textContent.trim()) {
+                            return label.textContent.trim();
+                        }
+                    }
+
+                    // Check for parent label
+                    const parentLabel = element.closest('label');
+                    if (parentLabel && parentLabel.textContent.trim()) {
+                        // Remove the text of the input itself from the label text
+                        const clone = parentLabel.cloneNode(true);
+                        const inputs = clone.querySelectorAll('input, select, textarea');
+                        inputs.forEach(input => input.remove());
+                        return clone.textContent.trim();
+                    }
+
+                    // Look for nearby text that might serve as label
+                    const parent = element.parentElement;
+                    if (parent) {
+                        // Check for text nodes or elements that might be labels
+                        const possibleLabels = Array.from(parent.childNodes)
+                            .filter(node => {
+                                return (node.nodeType === 3 && node.textContent.trim()) || // Text node
+                                      (node.nodeType === 1 && 
+                                       node !== element && 
+                                       !['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(node.tagName) &&
+                                       node.textContent.trim());
+                            });
+
+                        if (possibleLabels.length > 0) {
+                            return possibleLabels[0].textContent.trim();
+                        }
+                    }
+
+                    // Check for aria-label
+                    if (element.getAttribute('aria-label')) {
+                        return element.getAttribute('aria-label');
+                    }
+
+                    // Check for placeholder
+                    if (element.getAttribute('placeholder')) {
+                        return element.getAttribute('placeholder');
+                    }
+
+                    // Fallback to name or id
+                    return element.name || element.id || "";
+                }
+
+                // Function to determine field type
+                function getFieldType(element) {
+                    if (element.tagName === 'SELECT') {
+                        return 'select';
+                    }
+
+                    if (element.tagName === 'TEXTAREA') {
+                        return 'textarea';
+                    }
+
+                    if (element.tagName === 'INPUT') {
+                        return element.type || 'text';
+                    }
+
+                    if (element.getAttribute('contenteditable') === 'true') {
+                        return 'contenteditable';
+                    }
+
+                    return 'unknown';
+                }
+
+                // Function to get XPath of an element
+                function getXPath(element) {
+                    if (!element) return "/none";
+                    if (element.id) return `//*[@id="${element.id}"]`;
+
+                    let path = '';
+                    let current = element;
+
+                    while (current && current.nodeType === 1) {
+                        let index = 1;
+                        let sibling = current.previousSibling;
+
+                        while (sibling) {
+                            if (sibling.nodeType === 1 && sibling.tagName === current.tagName) {
+                                index++;
+                            }
+                            sibling = sibling.previousSibling;
+                        }
+
+                        const tagName = current.tagName.toLowerCase();
+                        const pathIndex = (index > 1) ? `[${index}]` : '';
+                        path = `/${tagName}${pathIndex}${path}`;
+
+                        current = current.parentNode;
+                        if (!current || current.tagName === 'BODY' || current === document) break;
+                    }
+
+                    return path || "/unknown";
+                }
+
+                // Function to get example value based on field type and label
+                function getExampleValue(field) {
+                    const type = field.type;
+                    const label = (field.label || field.name || field.id || "").toLowerCase();
+
+                    // Based on field type and label, suggest appropriate values
+                    if (type === 'text' || type === 'textarea') {
+                        if (label.includes('name')) {
+                            return "John Doe";
+                        } else if (label.includes('email')) {
+                            return "example@email.com";
+                        } else if (label.includes('phone')) {
+                            return "555-123-4567";
+                        } else if (label.includes('address')) {
+                            return "123 Main Street";
+                        } else {
+                            return "Sample text";
+                        }
+                    } else if (type === 'select') {
+                        return field.options.length > 0 ? field.options[0].text : "Select an option";
+                    } else if (type === 'radio') {
+                        return field.radioOptions.length > 0 ? field.radioOptions[0].text : "Select an option";
+                    } else if (type === 'checkbox') {
+                        return "true";
+                    } else if (type === 'email') {
+                        return "example@email.com";
+                    } else if (type === 'number') {
+                        return "42";
+                    } else if (type === 'date') {
+                        return "2025-04-27";
+                    } else {
+                        return "Sample value";
+                    }
+                }
+
+                // Find all form fields
+                const formFields = [];
+                const inputElements = document.querySelectorAll('input:not([type="hidden"]), select, textarea, [contenteditable="true"]');
+
+                inputElements.forEach(element => {
+                    if (!isVisible(element)) return;
+
+                    const labelText = getLabelText(element);
+                    const fieldType = getFieldType(element);
+                    const required = element.required || element.getAttribute('aria-required') === 'true';
+
+                    // Get options for select elements
+                    let options = [];
+                    if (element.tagName === 'SELECT') {
+                        options = Array.from(element.options).map(option => ({
+                            value: option.value,
+                            text: option.text
+                        }));
+                    }
+
+                    // Get radio button options if this is part of a radio group
+                    let radioOptions = [];
+                    if (fieldType === 'radio' && element.name) {
+                        const radioGroup = document.querySelectorAll(`input[type="radio"][name="${element.name}"]`);
+                        if (radioGroup.length > 1) {
+                            radioOptions = Array.from(radioGroup).map(radio => {
+                                const radioLabel = getLabelText(radio);
+                                return {
+                                    value: radio.value,
+                                    text: radioLabel || radio.value
+                                };
+                            });
+                        }
+                    }
+
+                    // Filter out fields with no identification
+                    if (labelText || element.name || element.id || element.placeholder) {
+                        const field = {
+                            label: labelText,
+                            name: element.name || "",
+                            id: element.id || "",
+                            type: fieldType,
+                            required: required,
+                            placeholder: element.placeholder || "",
+                            options: options,
+                            radioOptions: radioOptions,
+                            hasValue: element.value ? true : false,
+                            selector: element.id ? `#${element.id}` : 
+                                     element.name ? `[name="${element.name}"]` : null,
+                            xpath: getXPath(element)
+                        };
+
+                        // Add example value
+                        field.example = getExampleValue(field);
+
+                        formFields.push(field);
+                    }
+                });
+
+                return { 
+                    success: true, 
+                    fields: formFields,
+                    url: window.location.href,
+                    title: document.title
+                };
+            } catch (e) {
+                return { 
+                    success: false, 
+                    message: `Error mapping form fields: ${e.message}` 
+                };
+            }
+        })();
+        """
+
+        self.web_view.page().runJavaScript(js_script, self._handle_map_fields_result)
+
+    def _handle_map_fields_result(self, result):
+        """Handle the result of form field mapping"""
+        if result.get('success'):
+            fields = result.get('fields', [])
+            if fields:
+                # Store the field mapping
+                self.browser.mapped_form_fields = fields
+
+                # Format field information for display
+                field_details = []
+                for i, field in enumerate(fields):
+                    label = field.get('label') or field.get('name') or field.get('id')
+                    field_type = field.get('type')
+                    required = field.get('required')
+                    xpath = field.get('xpath')
+                    example = field.get('example')
+
+                    detail = f"{i + 1}. Field: '{label}'\n"
+                    detail += f"   Type: {field_type}\n"
+                    detail += f"   Required: {'Yes' if required else 'No'}\n"
+                    detail += f"   XPath: {xpath}\n"
+                    detail += f"   Example: {example}"
+
+                    # Add options if available
+                    if field.get('options') and len(field.get('options')) > 0:
+                        options = ", ".join([opt.get('text') for opt in field.get('options')])
+                        detail += f"\n   Options: {options}"
+
+                    # Add radio options if available
+                    if field.get('radioOptions') and len(field.get('radioOptions')) > 0:
+                        options = ", ".join([opt.get('text') for opt in field.get('radioOptions')])
+                        detail += f"\n   Options: {options}"
+
+                    field_details.append(detail)
+
+                details_text = "\n\n".join(field_details)
+                form_info = f"Form field mapping on {result.get('title')}\n\n{details_text}"
+
+                # Display the mapping information
+                self.browser.chat_window.add_message(form_info, Role.WEB_BROWSER)
+
+                # If there's LLM integration, send this to generate form data
+                if hasattr(self.browser, 'llm_integration'):
+                    self.browser.llm_integration.generate_form_data_from_mapping(fields)
+            else:
+                self.browser.chat_window.add_message("No form fields found to map.", Role.WEB_BROWSER)
+        else:
+            self.browser.chat_window.add_message(
+                f"✗ Failed to map form fields: {result.get('message')}",
+                Role.WEB_BROWSER
+            )
+
+    def fill_by_xpath(self, xpath_data):
+        """Fill form fields using direct XPath selectors"""
+        for xpath, value in xpath_data.items():
+            js_script = f"""
+            (function() {{
+                try {{
+                    // Find the element by XPath
+                    function getElementByXPath(xpath) {{
+                        return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                    }}
+
+                    // Get the element
+                    const element = getElementByXPath('{xpath}');
+                    if (!element) {{
+                        return {{ success: false, message: `Element not found by XPath: {xpath}` }};
+                    }}
+
+                    // Focus the element
+                    element.focus();
+
+                    // Handle different element types
+                    if (element.tagName === 'SELECT') {{
+                        // Handle select dropdowns
+                        let optionFound = false;
+
+                        for (const option of element.options) {{
+                            if (option.text.toLowerCase().includes('{value}'.toLowerCase()) || 
+                                option.value.toLowerCase() === '{value}'.toLowerCase()) {{
+                                element.value = option.value;
+                                optionFound = true;
+                                break;
+                            }}
+                        }}
+
+                        if (optionFound) {{
+                            element.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        }} else {{
+                            return {{ success: false, message: `Option '{value}' not found in dropdown` }};
+                        }}
+                    }}
+                    else if (element.type === 'checkbox' || element.getAttribute('role') === 'checkbox') {{
+                        // Handle checkboxes
+                        if ('{value}'.toLowerCase() === 'true' || 
+                            '{value}'.toLowerCase() === 'yes' || 
+                            '{value}'.toLowerCase() === 'checked' || 
+                            '{value}'.toLowerCase() === 'on') {{
+                            if (!element.checked) {{
+                                element.click();
+                            }}
+                        }} else if ('{value}'.toLowerCase() === 'false' || 
+                                    '{value}'.toLowerCase() === 'no' || 
+                                    '{value}'.toLowerCase() === 'unchecked' || 
+                                    '{value}'.toLowerCase() === 'off') {{
+                            if (element.checked) {{
+                                element.click();
+                            }}
+                        }} else {{
+                            element.click();
+                        }}
+                    }}
+                    else if (element.type === 'radio' || element.getAttribute('role') === 'radio') {{
+                        // Simply click radio buttons
+                        element.click();
+                    }}
+                    else {{
+                        // Handle text inputs
+                        if (element.value !== undefined) {{
+                            // Clear existing value
+                            element.value = '';
+                            element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+
+                            // Set new value
+                            element.value = '{value}';
+                            element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        }}
+                        else if (element.getAttribute('contenteditable') === 'true') {{
+                            // Handle contenteditable
+                            element.textContent = '{value}';
+                            element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        }}
+                    }}
+
+                    // Dispatch events
+                    if (element.tagName !== 'SELECT') {{
+                        element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    }}
+
+                    element.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    element.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+
+                    return {{ 
+                        success: true, 
+                        xpath: '{xpath}',
+                        value: '{value}'
+                    }};
+                }} catch (e) {{
+                    return {{ 
+                        success: false, 
+                        message: `Error filling by XPath: ${{e.message}}`,
+                        xpath: '{xpath}'
+                    }};
+                }}
+            }})();
+            """
+
+            self.web_view.page().runJavaScript(js_script, self._handle_xpath_fill_result)
+
+    def _handle_xpath_fill_result(self, result):
+        """Handle the result of an XPath fill operation"""
+        if result.get('success'):
+            self.browser.chat_window.add_message(
+                f"✓ Filled field by XPath: {result.get('xpath')}\n" +
+                f"  Value: {result.get('value')}",
+                Role.WEB_BROWSER
+            )
+        else:
+            self.browser.chat_window.add_message(
+                f"✗ Failed to fill by XPath: {result.get('message')}",
+                Role.WEB_BROWSER
+            )
+
     def fill_form(self, field_data):
         """Improved universal form field finder and filler with better field identification"""
         for field, value in field_data.items():
@@ -2242,6 +2854,33 @@ class Browser(QMainWindow):
 
         elif command == "reload":
             self.web_view.reload()
+
+        elif command == "detect_form":
+            # Use WebViewAutomator to detect form fields
+            self.web_automator.detect_form_fields()
+
+        elif command == "map_fields":
+            # Use WebViewAutomator to map form fields
+            self.web_automator.map_form_fields()
+
+        elif command == "auto_map":
+            # First map the fields in detail
+            self.web_automator.map_form_fields()
+            # The LLM integration will generate and fill the form after mapping
+
+        elif command == "auto_fill":
+            # Set a flag to indicate auto_fill was requested
+            self.auto_fill_requested = True
+            # First detect the form fields
+            self.web_automator.detect_form_fields()
+            # Make sure we have LLM integration initialized
+            if not hasattr(self, 'llm_integration'):
+                self.chat_window.add_message(
+                    "✗ Error: LLM integration not initialized. Cannot generate form data.",
+                    Role.WEB_BROWSER
+                )
+                self.auto_fill_requested = False  # Reset flag on error
+                return
 
         elif command == "fillform":
             # Use WebViewAutomator for form filling
