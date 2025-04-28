@@ -110,6 +110,13 @@ class AnalyzingWebPage(QWebEnginePage):
             """, self._handle_page_content)
 
     def _handle_page_content(self, page_data):
+        """Handle extracted page content and create compressed markdown for vector search"""
+        import re
+        import hashlib
+        import os
+        from datetime import datetime
+
+        # Normalize page_data if it's not a dictionary
         if isinstance(page_data, (str, int, float)):
             content = str(page_data)
             page_data = {
@@ -119,29 +126,117 @@ class AnalyzingWebPage(QWebEnginePage):
                 'url': self.url().toString()
             }
 
-        if page_data and self.browser:
-            print("\n=== Extracted Reader Content ===")
-            print(f"URL: {page_data.get('url', 'Unknown URL')}")
-            print(f"Title: {page_data.get('title', '')}")
-            print(f"Description: {page_data.get('description', '')}")
-            print(f"Reading Time: ~{page_data.get('readingTime', 0)} minutes")
-            print("\nContent Preview:")
-            print(page_data.get('content', '')[:1000])
-            print("=== End Reader Content ===\n")
+        if not page_data:
+            self.browser.chat_window.add_message(
+                "No data extracted from page.",
+                Role.WEB_BROWSER
+            )
+            return
 
-            content = page_data.get('content', '').strip()
-            if not content:
-                self.browser.chat_window.add_message(
-                    "No readable content found on this page.",
-                    Role.WEB_BROWSER
-                )
-                return
+        # Extract key data
+        url = page_data.get('url', 'Unknown URL')
+        title = page_data.get('title', 'Unknown Title')
+        description = page_data.get('description', '')
+        content = page_data.get('content', '').strip()
+        reading_time = page_data.get('readingTime', 0)
 
-            prompt = f"""Analyzing webpage in reader mode:
-    URL: {page_data.get('url')}
-    Title: {page_data.get('title')}
-    Description: {page_data.get('description')}
-    Estimated Reading Time: {page_data.get('readingTime')} minutes
+        # Log the extracted content (for debugging)
+        print("\n=== Extracted Reader Content ===")
+        print(f"URL: {url}")
+        print(f"Title: {title}")
+        print(f"Description: {description}")
+        print(f"Reading Time: ~{reading_time} minutes")
+        print("\nContent Preview:")
+        print(content[:1000] if content else "No content")
+        print("=== End Reader Content ===\n")
+
+        # Check if we have content to process
+        if not content:
+            self.browser.chat_window.add_message(
+                "No readable content found on this page.",
+                Role.WEB_BROWSER
+            )
+            return
+
+        # Create a folder for saved pages if it doesn't exist
+        save_dir = "saved_pages"
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
+        # Create hash of URL for unique filename
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:10]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{save_dir}/{url_hash}_{timestamp}.md"
+
+        # Create a clean domain name for metadata
+        domain = url.split("//")[-1].split("/")[0]
+
+        # Process the content for markdown conversion
+        def clean_content(text):
+            """Clean and structure the content for markdown"""
+            # Replace multiple newlines with double newline for markdown paragraphs
+            text = re.sub(r'\n{3,}', '\n\n', text)
+
+            # Try to identify and format headings
+            lines = text.split('\n')
+            formatted_lines = []
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    formatted_lines.append('')
+                    continue
+
+                # Check if line looks like a heading (short, ends with no punctuation)
+                if len(line) < 80 and not line[-1] in '.,:;?!' and line.istitle():
+                    # Make it a markdown heading
+                    formatted_lines.append(f'## {line}')
+                else:
+                    formatted_lines.append(line)
+
+            return '\n'.join(formatted_lines)
+
+        # Create compressed markdown with metadata
+        markdown_content = f"""---
+    title: "{title}"
+    url: {url}
+    domain: {domain}
+    date_saved: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    reading_time: {reading_time} minutes
+    description: "{description}"
+    ---
+
+    # {title}
+
+    *Source: [{domain}]({url})*
+
+    {clean_content(content)}
+    """
+
+        # Save the markdown file
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(markdown_content)
+
+            self.browser.chat_window.add_message(
+                f"✓ Page saved as markdown for vector search: {os.path.basename(filename)}",
+                Role.WEB_BROWSER
+            )
+        except Exception as e:
+            self.browser.chat_window.add_message(
+                f"✗ Error saving page: {str(e)}",
+                Role.WEB_BROWSER
+            )
+
+        # Check if we should analyze the content with LLM
+        self.browser.chat_window.add_message("🔍 Analyzing reader-mode content...", Role.WEB_BROWSER)
+
+        # Build LLM prompt with enhanced analysis requests for vector search optimization
+        prompt = f"""Analyzing webpage in reader mode:
+    URL: {url}
+    Title: {title}
+    Description: {description}
+    Estimated Reading Time: {reading_time} minutes
 
     Content:
     {content[:2000]}...
@@ -152,17 +247,23 @@ class AnalyzingWebPage(QWebEnginePage):
     3. Objective assessment of information quality and reliability 
     4. Any potential biases or perspectives present
     5. Context this content fits within
-"""
+    6. Key entities (people, organizations, products, locations)
+    7. Suggested keywords or tags for vector search indexing
 
-            self.browser.chat_window.add_message("🔍 Analyzing reader-mode content...", Role.WEB_BROWSER)
+    The last two items are important for search and retrieval purposes.
+    """
 
-            if hasattr(self.browser, 'llm_integration'):
-                self.browser.handle_chat_message(prompt)
-            else:
-                self.browser.chat_window.add_message(
-                    "Cannot analyze - LLM not initialized",
-                    Role.WEB_BROWSER
-                )
+        # Send to LLM for analysis if available
+        if hasattr(self.browser, 'llm_integration'):
+            self.browser.handle_chat_message(prompt)
+        else:
+            self.browser.chat_window.add_message(
+                "Cannot analyze - LLM not initialized",
+                Role.WEB_BROWSER
+            )
+
+        # Return the saved filename for future reference
+        return filename
 
 
 class WebViewAutomator:

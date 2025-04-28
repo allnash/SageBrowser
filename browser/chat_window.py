@@ -1,3 +1,7 @@
+import glob
+import os
+import re
+
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 from PyQt6.QtWidgets import QVBoxLayout, QWidget, QScrollArea, QHBoxLayout, QPushButton
 
@@ -5,6 +9,10 @@ from browser.widgets.chat_input import ChatInput
 from browser.widgets.chat_message import ChatMessage
 from lib.models import Role
 
+
+def import_traceback():
+    import traceback
+    return traceback.format_exc()
 
 class ChatWindow(QWidget):
     message_sent = pyqtSignal(str)
@@ -82,6 +90,9 @@ class ChatWindow(QWidget):
             "mapfields": self.cmd_map_fields,
             "automap": self.cmd_auto_map,
             "fillform": self.cmd_fill_form,
+            "search": self.cmd_search_pages,
+            "open": self.cmd_open_result,
+            "show": self.cmd_show_content,
             "click": self.cmd_click,
             "type": self.cmd_type,
             "submit": self.cmd_submit,
@@ -316,6 +327,321 @@ class ChatWindow(QWidget):
         self.browser_command.emit("submit", {"selector": selector})
         self.add_message(f"Submitting form: {selector}", False)
 
+
+    from typing import List, Dict, Any
+
+    def cmd_search_pages(self, args):
+        """Search through saved pages with vector search (falls back to keyword search)"""
+        if not args:
+            self.add_message("Usage: /search [search query]", Role.WEB_BROWSER)
+            return
+
+        query = args.strip()
+        self.add_message(f"Searching saved pages for: {query}", Role.WEB_BROWSER)
+
+        # Check if saved_pages directory exists and has files
+        saved_pages_dir = "saved_pages"
+        if not os.path.exists(saved_pages_dir):
+            os.makedirs(saved_pages_dir)
+            self.add_message("No saved pages found. Try browsing and analyzing some pages first.", Role.WEB_BROWSER)
+            return
+
+        # Check if directory has any .md files
+        if not glob.glob(os.path.join(saved_pages_dir, "*.md")):
+            self.add_message("No saved pages found. Try browsing and analyzing some pages first.", Role.WEB_BROWSER)
+            return
+
+        # Try vector search first, then fall back to keyword search
+        results = []
+        search_method = "vector"
+
+        try:
+            # Try to import vector search
+            self.add_message("Attempting vector search...", Role.WEB_BROWSER)
+
+            # Add lib directory to path if not already there
+            import sys
+            lib_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lib')
+            if lib_path not in sys.path:
+                sys.path.append(lib_path)
+
+            # Try to import vector_search module
+            try:
+                from lib.vector_search import search_saved_pages as vector_search
+                # Perform vector search
+                results = vector_search(query, top_k=5)
+                if results:
+                    self.add_message("Vector search successful.", Role.WEB_BROWSER)
+            except ImportError as e:
+                self.add_message(f"Vector search not available: {str(e)}", Role.WEB_BROWSER)
+                self.add_message("Falling back to keyword search...", Role.WEB_BROWSER)
+                search_method = "keyword"
+            except Exception as e:
+                self.add_message(f"Vector search failed: {str(e)}", Role.WEB_BROWSER)
+                self.add_message("Falling back to keyword search...", Role.WEB_BROWSER)
+                search_method = "keyword"
+        except Exception as e:
+            self.add_message(f"Error during vector search: {str(e)}", Role.WEB_BROWSER)
+            self.add_message("Falling back to keyword search...", Role.WEB_BROWSER)
+            search_method = "keyword"
+
+        # If vector search failed or returned no results, try keyword search
+        if search_method == "keyword" or not results:
+            try:
+                # Use the embedded keyword search implementation
+                results = self._keyword_search(query, top_k=5)
+                if results:
+                    self.add_message("Keyword search successful.", Role.WEB_BROWSER)
+            except Exception as e:
+                self.add_message(f"Keyword search failed: {str(e)}", Role.WEB_BROWSER)
+
+        # Check if we have any results
+        if not results:
+            self.add_message("No matching pages found for your query.", Role.WEB_BROWSER)
+            return
+
+        # Format and display results
+        result_text = "🔍 Search Results:\n\n"
+
+        for i, result in enumerate(results, 1):
+            metadata = result.get("metadata", {})
+            title = metadata.get("title", "Untitled")
+            url = metadata.get("url", "")
+            similarity = result.get("similarity", 0) * 100  # Convert to percentage
+
+            result_text += f"**{i}. {title}** ({similarity:.1f}% match)\n"
+            result_text += f"Source: {url}\n"
+
+            # Show a snippet of the matching chunk
+            chunk = result.get("chunk", "")
+            if chunk:
+                # Truncate and clean up the snippet
+                max_snippet_length = 200
+                snippet = chunk[:max_snippet_length]
+                if len(chunk) > max_snippet_length:
+                    snippet += "..."
+                result_text += f"Snippet: {snippet}\n"
+
+            result_text += "\n"
+
+        # Add command hints
+        result_text += "Use `/open [number]` to open a result in the browser or `/show [number]` to display its full content."
+
+        self.add_message(result_text, Role.WEB_BROWSER)
+
+        # Store results for later reference
+        self.last_search_results = results
+
+    def _keyword_search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Simple keyword-based search for saved pages"""
+        save_dir = "saved_pages"
+        md_files = glob.glob(os.path.join(save_dir, "*.md"))
+
+        # Normalize query
+        query_terms = self._normalize_text(query).split()
+        results = []
+
+        # Search through files
+        for file_path in md_files:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # Get metadata and content
+                metadata = self._extract_metadata(content)
+                text_content = self._remove_frontmatter(content)
+
+                # Normalize content
+                normalized_content = self._normalize_text(text_content)
+                normalized_title = self._normalize_text(metadata.get("title", ""))
+
+                # Calculate simple relevance score
+                score = 0
+                best_snippet = ""
+
+                # Check title match (higher weight)
+                for term in query_terms:
+                    if term in normalized_title:
+                        score += 5  # Title matches are more important
+
+                # Check content matches
+                matching_snippets = []
+                paragraphs = re.split(r'\n\n+', text_content)
+
+                for paragraph in paragraphs:
+                    norm_para = self._normalize_text(paragraph)
+                    para_score = 0
+
+                    for term in query_terms:
+                        if term in norm_para:
+                            para_score += 1
+
+                    if para_score > 0:
+                        matching_snippets.append((para_score, paragraph))
+
+                # Sort snippets by score
+                matching_snippets.sort(reverse=True, key=lambda x: x[0])
+
+                # Get best snippet
+                if matching_snippets:
+                    score += matching_snippets[0][0]
+                    best_snippet = matching_snippets[0][1]
+
+                    # Truncate snippet if needed
+                    if len(best_snippet) > 200:
+                        best_snippet = best_snippet[:200] + "..."
+
+                # Only include results with matches
+                if score > 0:
+                    results.append({
+                        "filename": os.path.basename(file_path),
+                        "metadata": metadata,
+                        "chunk": best_snippet,
+                        "similarity": score / (len(query_terms) * 6),  # Normalize to 0-1
+                        "file_path": file_path
+                    })
+
+            except Exception as e:
+                print(f"Error processing file {file_path}: {str(e)}")
+
+        # Sort by score (highest first)
+        results.sort(key=lambda x: x["similarity"], reverse=True)
+
+        # Return top k results
+        return results[:top_k]
+
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for keyword search"""
+        if not text:
+            return ""
+        # Convert to lowercase
+        text = text.lower()
+        # Replace multiple spaces with single space
+        text = re.sub(r'\s+', ' ', text)
+        # Remove punctuation that might interfere with matching
+        text = re.sub(r'[^\w\s]', ' ', text)
+        return text.strip()
+
+    def _extract_metadata(self, content: str) -> Dict[str, Any]:
+        """Extract metadata from markdown front matter"""
+        metadata = {}
+
+        # Extract front matter
+        match = re.match(r'---\n(.*?)\n---\n', content, re.DOTALL)
+        if match:
+            front_matter = match.group(1)
+            for line in front_matter.split('\n'):
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    metadata[key.strip()] = value.strip().strip('"\'')
+
+        return metadata
+
+    def _remove_frontmatter(self, content: str) -> str:
+        """Remove front matter from markdown content"""
+        return re.sub(r'---\n.*?\n---\n', '', content, flags=re.DOTALL).strip()
+
+    def cmd_open_result(self, args):
+        """Open a search result in the browser"""
+        if not args:
+            self.add_message("Usage: /open [result number]", False)
+            return
+
+        try:
+            # Get result number
+            result_num = int(args.strip())
+
+            # Check if we have search results
+            if not hasattr(self, 'last_search_results') or not self.last_search_results:
+                self.add_message("No search results available. Please run a search first.", False)
+                return
+
+            # Validate result number
+            if result_num < 1 or result_num > len(self.last_search_results):
+                self.add_message(f"Invalid result number. Please choose 1-{len(self.last_search_results)}.", False)
+                return
+
+            # Get the selected result
+            result = self.last_search_results[result_num - 1]
+            url = result.get("metadata", {}).get("url", "")
+
+            if not url:
+                self.add_message("URL not found for this result.", False)
+                return
+
+            # Navigate to the URL
+            self.browser_command.emit("goto", {"url": url})
+            self.add_message(f"Opening: {url}", False)
+
+        except ValueError:
+            self.add_message("Please specify a valid result number.", False)
+        except Exception as e:
+            self.add_message(f"Error opening result: {str(e)}", False)
+
+    def cmd_show_content(self, args):
+        """Show the full content of a search result"""
+        if not args:
+            self.add_message("Usage: /show [result number]", False)
+            return
+
+        try:
+            # Get result number
+            result_num = int(args.strip())
+
+            # Check if we have search results
+            if not hasattr(self, 'last_search_results') or not self.last_search_results:
+                self.add_message("No search results available. Please run a search first.", False)
+                return
+
+            # Validate result number
+            if result_num < 1 or result_num > len(self.last_search_results):
+                self.add_message(f"Invalid result number. Please choose 1-{len(self.last_search_results)}.", False)
+                return
+
+            # Get the selected result
+            result = self.last_search_results[result_num - 1]
+            file_path = result.get("file_path", "")
+
+            if not file_path or not os.path.exists(file_path):
+                self.add_message("Content file not found for this result.", False)
+                return
+
+            # Read the file content
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Extract metadata
+            import re
+            metadata = {}
+            match = re.match(r'---\n(.*?)\n---\n', content, re.DOTALL)
+            if match:
+                front_matter = match.group(1)
+                for line in front_matter.split('\n'):
+                    if ':' in line:
+                        key, value = line.split(':', 1)
+                        metadata[key.strip()] = value.strip().strip('"\'')
+
+            # Remove front matter from display
+            content = re.sub(r'---\n.*?\n---\n', '', content, flags=re.DOTALL)
+
+            # Format the display
+            title = metadata.get("title", "Untitled")
+            url = metadata.get("url", "")
+            date_saved = metadata.get("date_saved", "Unknown date")
+
+            display_text = f"# {title}\n\n"
+            display_text += f"Source: {url}\n"
+            display_text += f"Saved: {date_saved}\n\n"
+            display_text += "---\n\n"
+            display_text += content
+
+            self.add_message(display_text, False)
+
+        except ValueError:
+            self.add_message("Please specify a valid result number.", False)
+        except Exception as e:
+            self.add_message(f"Error showing content: {str(e)}", False)
+
     def cmd_help(self, args):
         """Show help for commands"""
         help_text = """
@@ -324,12 +650,19 @@ class ChatWindow(QWidget):
     /back - Go back in history
     /forward - Go forward in history
     /reload - Reload current page
-    /fillform [data] - Fill form fields (JSON or field=value,field2=value2)
+
+    Form commands:
+    /fillform [data] - Auto-detect fields and fill form (JSON or field=value,field2=value2)
     /type [field]:[text] - Type text into field (use colon to separate)
     /type "[field]" [text] - Type text into field (use quotes for fields with spaces)
     /click [text] - Click on element with text or button
     /submit - Submit a form
     /debug [selector] - Debug element properties
+
+    Vector search commands:
+    /search [query] - Search through saved pages
+    /open [number] - Open a search result in the browser
+    /show [number] - Display full content of a search result
 
     Form element commands:
     /select [selector]:[option] - Select an option from a dropdown 
